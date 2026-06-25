@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>学科国际象棋（答题走棋+复盘+残局）</title>
+<style>
+  body {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    background: #f0f2f5;
+    font-family: Arial, sans-serif;
+    margin: 0;
+  }
+  .container {
+    display: flex;
+    gap: 20px;
+    align-items: flex-start;
+  }
+  .board {
+    display: grid;
+    grid-template-columns: repeat(8, 60px);
+    grid-template-rows: repeat(8, 60px);
+    border: 3px solid #333;
+  }
+  .square {
+    width: 60px;
+    height: 60px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-size: 36px;
+    cursor: pointer;
+  }
+  .white { background: #f0d9b5; }
+  .black { background: #b58863; }
+  .selected { background: #7fc97f !important; }
+  .possible { background: #ffff0080 !important; }
+  .panel {
+    width: 260px;
+    background: white;
+    padding: 15px;
+    border-radius: 10px;
+    box-shadow: 0 0 10px rgba(0,0,0,0.1);
+  }
+  button {
+    width: 100%;
+    padding: 8px;
+    margin: 5px 0;
+    border: none;
+    border-radius: 5px;
+    background: #3498db;
+    color: white;
+    cursor: pointer;
+  }
+  button:hover { background: #2980b9; }
+  .log {
+    height: 180px;
+    overflow-y: auto;
+    border: 1px solid #ddd;
+    padding: 8px;
+    font-size: 12px;
+    margin-top: 10px;
+  }
+  .title {
+    font-size: 18px;
+    font-weight: bold;
+    margin-bottom: 10px;
+  }
+  .quiz-box {
+    background: #fff3cd;
+    padding: 10px;
+    border-radius: 8px;
+    margin-bottom: 10px;
+    font-size: 14px;
+  }
+  .quiz-opt {
+    padding: 5px;
+    margin: 3px 0;
+    background: #e9ecef;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .quiz-opt:hover { background: #d6d8db; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="panel">
+    <div class="title">难度选择</div>
+    <button onclick="setDifficulty(1)">简单（随机）</button>
+    <button onclick="setDifficulty(2)">中等（吃子优先）</button>
+    <button onclick="setDifficulty(3)">困难（攻防兼备）</button>
+ 
+    <div class="title" style="margin-top:15px">复盘</div>
+    <button onclick="prevStep()">⬅ 上一步</button>
+    <button onclick="nextStep()">➡ 下一步</button>
+    <button onclick="resetBoard()">重新开始</button>
+ 
+    <div class="title" style="margin-top:15px">残局练习</div>
+    <button onclick="loadEndgame(1)">后杀王</button>
+    <button onclick="loadEndgame(2)">车杀王</button>
+    <button onclick="loadEndgame(3)">象杀王</button>
+ 
+    <div class="log" id="log"></div>
+  </div>
+ 
+  <div>
+    <div class="quiz-box" id="quizBox" style="display:none;">
+      <div id="quizText"></div>
+      <div id="quizOpts"></div>
+    </div>
+    <div class="board" id="board"></div>
+  </div>
+</div>
+ 
+<script>
+const boardEl = document.getElementById("board");
+const logEl = document.getElementById("log");
+const quizBox = document.getElementById("quizBox");
+const quizText = document.getElementById("quizText");
+const quizOpts = document.getElementById("quizOpts");
+ 
+let board = [];
+let turn = "w";
+let selected = null;
+let history = [];
+let historyIndex = -1;
+let difficulty = 2;
+let waitingAnswer = false;
+let pendingMove = null;
+ 
+const pieces = {
+  wP: "♙", wR: "♖", wN: "♘", wB: "♗", wQ: "♕", wK: "♔",
+  bP: "♟", bR: "♜", bN: "♞", bB: "♝", bQ: "♛", bK: "♚"
+};
+ 
+const initial = [
+  ["bR","bN","bB","bQ","bK","bB","bN","bR"],
+  ["bP","bP","bP","bP","bP","bP","bP","bP"],
+  [null,null,null,null,null,null,null,null],
+  [null,null,null,null,null,null,null,null],
+  [null,null,null,null,null,null,null,null],
+  [null,null,null,null,null,null,null,null],
+  ["wP","wP","wP","wP","wP","wP","wP","wP"],
+  ["wR","wN","wB","wQ","wK","wB","wN","wR"]
+];
+ 
+// 学科题库（三国+语文+数学）
+const quizPool = [
+  {type:"三国", q:"桃园三结义是哪三人？", opts:["刘备关羽张飞","刘备赵云关羽","曹操夏侯渊","孙坚孙策"], ans:0},
+  {type:"三国", q:"草船借箭主角是谁？", opts:["周瑜","曹操","诸葛亮","刘备"], ans:2},
+  {type:"三国", q:"过五关斩六将是谁？", opts:["张飞","关羽","赵云","马超"], ans:1},
+  {type:"语文", q:"‘万事俱备’下一句？", opts:["只欠东风","只欠西风","只欠南风"], ans:0},
+  {type:"语文", q:"‘路遥知马力’下一句？", opts:["日久见人心","岁月见真情","患难见真情"], ans:0},
+  {type:"数学", q:"12 × 8 = ?", opts:["96","86","106"], ans:0},
+  {type:"数学", q:"45 + 37 = ?", opts:["72","82","92"], ans:1},
+  {type:"数学", q:"63 ÷ 7 = ?", opts:["8","9","7"], ans:1}
+];
+ 
+function initBoard() {
+  board = JSON.parse(JSON.stringify(initial));
+  history = [];
+  historyIndex = -1;
+  saveHistory();
+  render();
+}
+ 
+function render() {
+  boardEl.innerHTML = "";
+  for (let y=0;y<8;y++) {
+    for (let x=0;x<8;x++) {
+      const sq = document.createElement("div");
+      sq.className = `square ${(x+y)%2===0?"white":"black"}`;
+      sq.dataset.x = x;
+      sq.dataset.y = y;
+      const p = board[y][x];
+      if (p) sq.textContent = pieces[p];
+      sq.onclick = () => clickSquare(x,y);
+      boardEl.appendChild(sq);
+    }
+  }
+}
+ 
+function clickSquare(x,y) {
+  if (waitingAnswer) return;
+  if (selected) {
+    const [sx,sy] = selected;
+    if (isValidMove(sx,sy,x,y)) {
+      pendingMove = [sx,sy,x,y];
+      showQuiz();
+      selected = null;
+    } else {
+      selected = [x,y];
+      highlight(x,y);
+    }
+  } else {
+    if (board[y][x] && board[y][x][0] === turn) {
+      selected = [x,y];
+      highlight(x,y);
+    }
+  }
+}
+ 
+function highlight(x,y) {
+  document.querySelectorAll(".square").forEach(s=>{
+    s.classList.remove("selected","possible");
+  });
+  const el = document.querySelector(`[data-x="${x}"][data-y="${y}"]`);
+  el.classList.add("selected");
+  getMoves(x,y).forEach(([nx,ny])=>{
+    document.querySelector(`[data-x="${nx}"][data-y="${ny}"]`).classList.add("possible");
+  });
+}
+ 
+function isValidMove(sx,sy,ex,ey) {
+  return getMoves(sx,sy).some(([x,y])=>x===ex&&y===ey);
+}
+ 
+function getMoves(x,y) {
+  const p = board[y][x];
+  if (!p) return [];
+  const color = p[0];
+  const type = p[1];
+  let moves = [];
+ 
+  const dirs = {
+    P: color==="w"?[[-1,-1],[1,-1],[0,-1]]:[[1,1],[-1,1],[0,1]],
+    R: [[1,0],[-1,0],[0,1],[0,-1]],
+    B: [[1,1],[-1,-1],[1,-1],[-1,1]],
+    Q: [[1,0],[-1,0],[0,1],[0,-1],[1,1],[-1,-1],[1,-1],[-1,1]],
+    N: [[2,1],[1,2],[-1,2],[-2,1],[-2,-1],[-1,-2],[1,-2],[2,-1]],
+    K: [[1,0],[-1,0],[0,1],[0,-1],[1,1],[-1,-1],[1,-1],[-1,1]]
+  };
+ 
+  if (type==="P") {
+    dirs[type].forEach(([dx,dy])=>{
+      let nx = x+dx, ny = y+dy;
+      if (nx<0||nx>7||ny<0||ny>7) return;
+      if (dx===0) {
+        if (!board[ny][nx]) {
+          moves.push([nx,ny]);
+          // 兵第一步走两格
+          if ((color==="w"&&y===6)||(color==="b"&&y===1)) {
+            let ny2 = ny+dy;
+            if (!board[ny2][nx]) moves.push([nx,ny2]);
+          }
+        }
+      } else {
+        if (board[ny][nx] && board[ny][nx][0]!==color) moves.push([nx,ny]);
+      }
+    });
+  } else if (type==="N"||type==="K") {
+    dirs[type].forEach(([dx,dy])=>{
+      let nx = x+dx, ny = y+dy;
+      if (nx<0||nx>7||ny<0||ny>7) return;
+      if (!board[ny][nx] || board[ny][nx][0]!==color) moves.push([nx,ny]);
+    });
+    // 王车易位
+    if (type==="K" && !hasMoved(x,y)) {
+      if (color==="w") {
+        if (!board[7][0]&&!board[7][1]&&!board[7][2]&&board[7][3]===null&&board[7][0]==="wR"&&!hasMoved(0,7)) moves.push([2,7]);
+        if (!board[7][5]&&!board[7][6]&&board[7][7]==="wR"&&!hasMoved(7,7)) moves.push([6,7]);
+      } else {
+        if (!board[0][0]&&!board[0][1]&&!board[0][2]&&board[0][3]===null&&board[0][0]==="bR"&&!hasMoved(0,0)) moves.push([2,0]);
+        if (!board[0][5]&&!board[0][6]&&board[0][7]==="bR"&&!hasMoved(7,0)) moves.push([6,0]);
+      }
+    }
+  } else {
+    dirs[type].forEach(([dx,dy])=>{
+      let nx = x+dx, ny = y+dy;
+      while (nx>=0&&nx<8&&ny>=0&&ny<8) {
+        if (!board[ny][nx]) {
+          moves.push([nx,ny]);
+        } else {
+          if (board[ny][nx][0]!==color) moves.push([nx,ny]);
+          break;
+        }
+        nx += dx; ny += dy;
+      }
+    });
+  }
+  return moves;
+}
+ 
+function hasMoved(x,y) {
+  return history.some(h=>h[y][x]!==initial[y][x]);
+}
+ 
+function move(sx,sy,ex,ey) {
+  board[ey][ex] = board[sy][sx];
+  board[sy][sx] = null;
+  // 王车易位处理
+  if (board[ey][ex][1]==="K" && Math.abs(sx-ex)===2) {
+    if (ex===2) { board[ey][3]=board[ey][0]; board[ey][0]=null; }
+    if (ex===6) { board[ey][5]=board[ey][7]; board[ey][7]=null; }
+  }
+  turn = turn==="w"?"b":"w";
+  saveHistory();
+  log(`(${turn==="w"?"黑":"白"}) ${pieces[board[ey][ex]]} ${sx},${sy} → ${ex},${ey}`);
+}
+ 
+function saveHistory() {
+  history = history.slice(0, historyIndex+1);
+  history.push(JSON.parse(JSON.stringify(board)));
+  historyIndex = history.length-1;
+}
+ 
+function prevStep() {
+  if (historyIndex>0) {
+    historyIndex--;
+    board = JSON.parse(JSON.stringify(history[historyIndex]));
+    turn = turn==="w"?"b":"w";
+    render();
+  }
+}
+ 
+function nextStep() {
+  if (historyIndex<history.length-1) {
+    historyIndex++;
+    board = JSON.parse(JSON.stringify(history[historyIndex]));
+    turn = turn==="w"?"b":"w";
+    render();
+  }
+}
+ 
+function resetBoard() {
+  initBoard();
+  turn = "w";
+  log("新局开始");
+}
+ 
+function log(text) {
+  logEl.innerHTML += text + "<br>";
+  logEl.scrollTop = logEl.scrollHeight;
+}
+ 
+// AI
+function aiMove() {
+  if (turn === "w") return;
+  let allMoves = [];
+  for (let y=0;y<8;y++) {
+    for (let x=0;x<8;x++) {
+      if (board[y][x] && board[y][x][0]==="b") {
+        getMoves(x,y).forEach(m=>allMoves.push([x,y,...m]));
+      }
+    }
+  }
+  if (allMoves.length===0) { log("白方获胜！"); return; }
+  let best = allMoves[0];
+  if (difficulty >= 2) allMoves.sort((a,b)=>(board[b[3]][b[2]]?100:0)-(board[a[3]][a[2]]?100:0));
+  if (difficulty === 3) best = allMoves[Math.floor(Math.random()*3)];
+  else best = allMoves[0];
+  move(best[0],best[1],best[2],best[3]);
+  render();
+}
+ 
+function setDifficulty(d) { difficulty = d; log(`难度：${d===1?"简单":d===2?"中等":"困难"}`); }
+ 
+// 残局
+function loadEndgame(id) {
+  if (id===1) board = [[null,null,null,null,"bK"],[null],[],[],[],[],[],[null,null,null,"wQ",null,"wK"]].map(r=>r.concat(Array(8-r.length).fill(null)));
+  if (id===2) board = [[null,null,null,null,"bK"],[null],[],[],[],[],[],["wR",null,null,null,null,"wK"]].map(r=>r.concat(Array(8-r.length).fill(null)));
+  if (id===3) board = [[null,null,null,null,"bK"],[null],[],[],[],[],[],[null,null,"wB",null,null,"wK"]].map(r=>r.concat(Array(8-r.length).fill(null)));
+  saveHistory(); turn = "w"; render(); log("加载残局");
+}
+ 
+// 学科答题
+function showQuiz() {
+  waitingAnswer = true;
+  const q = quizPool[Math.floor(Math.random()*quizPool.length)];
+  quizText.textContent = `【${q.type}】${q.q}`;
+  quizOpts.innerHTML = "";
+  q.opts.forEach((opt,i)=>{
+    const div = document.createElement("div");
+    div.className = "quiz-opt";
+    div.textContent = opt;
+    div.onclick = ()=>checkAnswer(i,q.ans);
+    quizOpts.appendChild(div);
+  });
+  quizBox.style.display = "block";
+}
+ 
+function checkAnswer(sel,ans) {
+  quizBox.style.display = "none";
+  waitingAnswer = false;
+  if (sel===ans) {
+    move(...pendingMove);
+    render();
+    setTimeout(aiMove,600);
+  } else {
+    log("答错！此步取消");
+  }
+  pendingMove = null;
+}
+ 
+initBoard();
+</script>
+</body>
+</html>
